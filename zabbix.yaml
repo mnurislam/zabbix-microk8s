@@ -1,0 +1,159 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: zabbix
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zabbix-server
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zabbix-server
+  template:
+    metadata:
+      labels:
+        app: zabbix-server
+    spec:
+      initContainers:
+      - name: import-schema
+        image: ifoundmyselfheadless/zabbix-alpine-custom:1.0.2
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "Waiting for MariaDB..."
+            until nc -z mariadb 3306; do sleep 2; done
+            echo "Importing schema..."
+            mysql --ssl=0 -hmariadb -uzabbix -pzabbixpass zabbix < /usr/local/share/zabbix/database/mysql/schema.sql
+            mysql --ssl=0 -hmariadb -uzabbix -pzabbixpass zabbix < /usr/local/share/zabbix/database/mysql/images.sql
+            mysql --ssl=0 -hmariadb -uzabbix -pzabbixpass zabbix < /usr/local/share/zabbix/database/mysql/data.sql
+        env:
+        - name: MYSQL_USER
+          value: zabbix
+        - name: MYSQL_PASSWORD
+          value: zabbixpass
+        - name: MYSQL_DATABASE
+          value: zabbix
+      containers:
+      - name: zabbix-server
+        image: ifoundmyselfheadless/zabbix-alpine-custom:1.0.2
+        ports:
+        - containerPort: 10051
+        env:
+        - name: DB_SERVER_HOST
+          value: mariadb
+        - name: MYSQL_DATABASE
+          value: zabbix
+        - name: MYSQL_USER
+          value: zabbix
+        - name: MYSQL_PASSWORD
+          value: zabbixpass
+      imagePullSecrets:
+      - name: regcred
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+      - name: mariadb
+        image: mariadb:10.5
+        env:
+        - name: MYSQL_DATABASE
+          value: zabbix
+        - name: MYSQL_USER
+          value: zabbix
+        - name: MYSQL_PASSWORD
+          value: zabbixpass
+        - name: MYSQL_ROOT_PASSWORD
+          value: rootpass
+        ports:
+        - containerPort: 3306
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zabbix-frontend
+  namespace: zabbix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zabbix-frontend
+  template:
+    metadata:
+      labels:
+        app: zabbix-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: zabbix/zabbix-web-nginx-mysql:alpine-6.0-latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_SERVER_HOST
+          value: mariadb
+        - name: MYSQL_DATABASE
+          value: zabbix
+        - name: MYSQL_USER
+          value: zabbix
+        - name: MYSQL_PASSWORD
+          value: zabbixpass
+        - name: ZBX_SERVER_HOST
+          value: zabbix-server
+        - name: PHP_TZ
+          value: Asia/Kuala_Lumpur
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zabbix-server
+  namespace: zabbix
+spec:
+  selector:
+    app: zabbix-server
+  ports:
+    - port: 10051
+      targetPort: 10051
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: zabbix
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - port: 3306
+      targetPort: 3306
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zabbix-frontend
+  namespace: zabbix
+spec:
+  type: NodePort
+  selector:
+    app: zabbix-frontend
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+
